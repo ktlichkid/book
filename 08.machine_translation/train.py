@@ -137,7 +137,7 @@ def seq_to_seq_net(source_dict_dim,
 
 def main():
     paddle.init(use_gpu=with_gpu, trainer_count=1)
-    is_generating = False
+    is_generating = True
 
     # source and target dict dim.
     dict_size = 30000
@@ -158,8 +158,8 @@ def main():
         # define data reader
         wmt14_reader = paddle.batch(
             paddle.reader.shuffle(
-                paddle.dataset.wmt14.train(dict_size), buf_size=8192),
-            batch_size=4)
+                paddle.dataset.wmt16.train(dict_size, dict_size), buf_size=8192),
+            batch_size=32)
 
         # define event_handler callback
         def event_handler(event):
@@ -172,10 +172,10 @@ def main():
                     sys.stdout.write('.')
                     sys.stdout.flush()
 
-                if not event.batch_id % 10:
-                    save_path = 'params_pass_%05d_batch_%05d.tar' % (
-                        event.pass_id, event.batch_id)
-                    save_model(trainer, parameters, save_path)
+                #if not event.batch_id % 10:
+                #    save_path = 'params_pass_%05d_batch_%05d.tar' % (
+                #        event.pass_id, event.batch_id)
+               #    save_model(trainer, parameters, save_path)
 
             if isinstance(event, paddle.event.EndPass):
                 # save parameters
@@ -184,24 +184,30 @@ def main():
 
         # start to train
         trainer.train(
-            reader=wmt14_reader, event_handler=event_handler, num_passes=2)
+            reader=wmt14_reader, event_handler=event_handler, num_passes=100)
 
     # generate a english sequence to french
     else:
         # use the first 3 samples for generation
         gen_data = []
-        gen_num = 3
-        for item in paddle.dataset.wmt14.gen(dict_size)():
+        print_data = []
+        gen_num = 3000
+        for item in paddle.dataset.wmt16.test(dict_size, dict_size)():
+            # print(item[0])
+            # print(item[2])
             gen_data.append([item[0]])
-            if len(gen_data) == gen_num:
-                break
+            print_data.append([item[2]])
+            # if len(gen_data) == gen_num:
+            #     break
 
         beam_size = 3
         beam_gen = seq_to_seq_net(source_dict_dim, target_dict_dim,
                                   is_generating, beam_size)
 
         # get the trained model, whose bleu = 26.92
-        parameters = paddle.dataset.wmt14.model()
+        # parameters = paddle.dataset.wmt14.model()
+        with open('params_pass_00070.tar', 'r') as f:
+            parameters = paddle.parameters.Parameters.from_tar(f)
 
         # prob is the prediction probabilities, and id is the prediction word.
         beam_result = paddle.infer(
@@ -211,24 +217,38 @@ def main():
             field=['prob', 'id'])
 
         # load the dictionary
-        src_dict, trg_dict = paddle.dataset.wmt14.get_dict(dict_size)
+        # src_dict, trg_dict = paddle.dataset.wmt14.get_dict(dict_size)
+        src_dict = paddle.dataset.wmt16.get_dict('en', dict_size, True)
+        trg_dict = paddle.dataset.wmt16.get_dict('de', dict_size, True)
 
         gen_sen_idx = np.where(beam_result[1] == -1)[0]
-        assert len(gen_sen_idx) == len(gen_data) * beam_size
+        # assert len(gen_sen_idx) == len(gen_data) * beam_size
+
+        trg_out = open("./trg_out", "w")
+        inf_out = open("./inf_out", "w")
 
         # -1 is the delimiter of generated sequences.
         # the first element of each generated sequence its length.
         start_pos, end_pos = 1, 0
         for i, sample in enumerate(gen_data):
-            print(
-                " ".join([src_dict[w] for w in sample[0][1:-1]])
-            )  # skip the start and ending mark when printing the source sentence
+            trg_sentence = " ".join([trg_dict[w] for w in print_data[i][0][0:-1]])
+            # print(
+            #     " ".join([trg_dict[w] for w in sample[0][1:-1]])
+            # )  # skip the start and ending mark when printing the source sentence
+            trg_out.write(trg_sentence + "\n")
             for j in xrange(beam_size):
                 end_pos = gen_sen_idx[i * beam_size + j]
-                print("%.4f\t%s" % (beam_result[0][i][j], " ".join(
-                    trg_dict[w] for w in beam_result[1][start_pos:end_pos])))
+                if j == 0:
+                    inf_sentence = " ".join(trg_dict[w] for w in beam_result[1][start_pos:end_pos][0:-1])
+                    # print (inf_sentence)
+                    inf_out.write(inf_sentence + "\n")
+                    # print("%.4f\t%s" % (beam_result[0][i][j], " ".join(
+                    #     trg_dict[w] for w in beam_result[1][start_pos:end_pos][0:-1])))
                 start_pos = end_pos + 2
-            print("\n")
+            # print("\n")
+
+        trg_out.close()
+        inf_out.close()
 
 
 if __name__ == '__main__':

@@ -1,3 +1,4 @@
+*.tar
 data/wmt14
 data/pre-wmt14
 pretrained/wmt14_model
